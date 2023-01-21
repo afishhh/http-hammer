@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::PathBuf,
+    process::ExitCode,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -27,6 +28,7 @@ struct HammerInfo {
     headers: HeaderMap,
     body: String,
     count: u64,
+    max_concurrent: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for HammerInfo {
@@ -43,6 +45,7 @@ impl<'de> Deserialize<'de> for HammerInfo {
             #[serde(default = "String::new")]
             body: String,
             count: u64,
+            max_concurrent: Option<u64>,
         }
 
         struct Expected {
@@ -68,18 +71,21 @@ impl<'de> Deserialize<'de> for HammerInfo {
                 &Expected::new("a valid url"),
             )
         })?;
+        let parsed_method = match raw.method {
+            Some(method) => method.parse().map_err(|_| {
+                serde::de::Error::invalid_value(
+                    serde::de::Unexpected::Str(&method),
+                    &Expected::new("an http method"),
+                )
+            })?,
+            None => Method::GET,
+        };
         Ok(HammerInfo {
-            name: raw.name.unwrap_or_else(|| parsed_uri.to_string()),
+            name: raw
+                .name
+                .unwrap_or_else(|| format!("{parsed_method} {parsed_uri}")),
             uri: parsed_uri,
-            method: match raw.method {
-                Some(method) => method.parse().map_err(|_| {
-                    serde::de::Error::invalid_value(
-                        serde::de::Unexpected::Str(&method),
-                        &Expected::new("an http method"),
-                    )
-                })?,
-                None => Method::GET,
-            },
+            method: parsed_method,
             headers: match raw.headers {
                 Some(headers) => {
                     let mut new = HeaderMap::new();
@@ -107,6 +113,7 @@ impl<'de> Deserialize<'de> for HammerInfo {
             },
             body: raw.body,
             count: raw.count,
+            max_concurrent: raw.max_concurrent,
         })
     }
 }
@@ -127,7 +134,7 @@ struct Args {
     urls: PathBuf,
 }
 
-async fn real_main() -> Result<()> {
+async fn real_main() -> Result<ExitCode> {
     let args = Args::parse();
 
     let mut buf = vec![];
@@ -137,18 +144,24 @@ async fn real_main() -> Result<()> {
             .context("Could not read urls file")?;
     }
 
-    let urls = toml::de::from_slice::<HammerFile>(&buf).context("Could not parse urls file")?.hammer;
+    let urls = toml::de::from_slice::<HammerFile>(&buf)
+        .context("Could not parse urls file")?
+        .hammer;
 
     let client: Client<_, hyper::Body> =
         hyper::Client::builder().build(hyper_tls::HttpsConnector::new());
 
-    for info in urls {
+    'url_loop: for info in urls {
         let todo = Arc::new(AtomicU64::from(info.count));
         let error_encountered = Arc::new(AtomicBool::new(false));
 
         let mut handles = vec![];
 
-        for tidx in 0..args.tasks {
+        let tasks = info
+            .max_concurrent
+            .map(|x| x.min(args.tasks))
+            .unwrap_or(args.tasks);
+        for _ in 0..tasks {
             let info = info.clone();
             let client = client.clone();
             let todo = todo.clone();
@@ -163,7 +176,7 @@ async fn real_main() -> Result<()> {
                     let mut done: u64 = 0;
 
                     while todo
-                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| x.checked_sub(1))
+                        .fetch_update(Ordering::Release, Ordering::Relaxed, |x| x.checked_sub(1))
                         .is_ok()
                         && !error_encountered2.load(Ordering::Relaxed)
                     {
@@ -179,7 +192,6 @@ async fn real_main() -> Result<()> {
 
                         let start = std::time::Instant::now();
 
-                        // let response = client.get(url.clone()).await?;
                         let response = client.request(request).await?;
                         if !response.status().is_success() {
                             bail!(
@@ -234,13 +246,13 @@ async fn real_main() -> Result<()> {
             previous.push_back((now, done));
 
             eprint!(
-                "\x1b[2KHammering {} \x1b[33;1m{done}/{}\x1b[0m",
+                "\x1b[2KHammering {} \x1b[33;1m{done}/{}\x1b[0m (\x1b[35;1m{tasks}\x1b[0m tasks",
                 info.name, info.count
             );
             if let Some(per_sec) = per_sec {
-                eprint!(" (\x1b[94;1m{per_sec:.0}/s\x1b[0m)");
+                eprint!(", \x1b[94;1m{per_sec:.0}/s\x1b[0m");
             }
-            eprint!("\r");
+            eprint!(")\r");
             std::io::stderr()
                 .flush()
                 .context("Could not flush stderr")?;
@@ -254,7 +266,12 @@ async fn real_main() -> Result<()> {
                 count = info.count
             );
         } else {
-            eprintln!()
+            let done = info.count - todo.load(Ordering::Acquire);
+            eprintln!(
+                "\x1b[2KHammering {} \x1b[31;1mfailed\x1b[0m \x1b[33;1m{done}/{count}\x1b[0m",
+                info.name,
+                count = info.count
+            );
         }
 
         let mut max = std::time::Duration::ZERO;
@@ -262,13 +279,24 @@ async fn real_main() -> Result<()> {
         let mut sum = std::time::Duration::ZERO;
         let mut done = 0;
 
-        for handle in handles {
-            let (tmin, tsum, tdone, tmax) = handle.await??;
+        let mut any_failed = false;
+        for (tidx, handle) in handles.into_iter().enumerate() {
+            match handle.await? {
+                Ok((tmin, tsum, tdone, tmax)) => {
+                    max = std::cmp::max(max, tmax);
+                    min = std::cmp::min(min, tmin);
+                    sum += tsum;
+                    done += tdone;
+                }
+                Err(e) => {
+                    eprintln!("    Task {} \x1b[31;1mfailed\x1b[0m: {e}", tidx + 1);
+                    any_failed = true;
+                }
+            }
+        }
 
-            max = std::cmp::max(max, tmax);
-            min = std::cmp::min(min, tmin);
-            sum += tsum;
-            done += tdone;
+        if any_failed {
+                    return Ok(ExitCode::FAILURE);
         }
 
         assert_eq!(done, info.count);
@@ -282,11 +310,11 @@ async fn real_main() -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     match real_main().await {
         Ok(value) => value,
         Err(error) => {
@@ -298,6 +326,7 @@ async fn main() {
             for (i, error) in chain {
                 eprintln!("\x1b[31;1m#{i}\x1b[0m: {error}");
             }
+            ExitCode::FAILURE
         }
     }
 }
