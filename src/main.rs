@@ -124,14 +124,35 @@ struct Args {
     #[arg(long, short, default_value_t = 1, value_parser = clap::value_parser!(u64).range(0..))]
     tasks: u64,
 
-    /// File with url and request count pairs.
+    /// TOML file with hammering instructions.
     ///
-    /// The file should contains newline delimited pairs
-    /// of url and request count separated by a comma.
-    /// ex.
-    /// url, requests
-    /// url2, requests2
-    urls: PathBuf,
+    /// # Format
+    /// It should contain an array of tables called "hammer" where each table should have the
+    /// following properties:
+    ///     'uri': a string containing a valid uri
+    ///     'count' a number specifying how many reqeusts to make
+    ///
+    /// It can also have these optional properties:
+    ///     'method': a string containing the HTTP method to use
+    ///     'headers': a header name -> header value map
+    ///     'body': a string used as the body for the request
+    ///     'name': a string displayed while hammering instead of the default `${METHOD} ${URI}` name
+    ///     'max_concurrent': a number representing the maximum number of tasks that should be used
+    ///                       to hammer the url
+    ///
+    /// # Example entry
+    /// [[hammer]]
+    /// name = "my endpoint"
+    /// uri = "http://127.0.0.1:8000/do_something"
+    /// method = "POST"
+    /// headers = { "Content-Type" = "application/json" }
+    /// body = '''
+    ///   { "do":"thing" }
+    /// '''
+    /// count = 20000
+    /// max_concurrent = 10
+    #[arg(verbatim_doc_comment)]
+    config: PathBuf,
 }
 
 async fn real_main() -> Result<ExitCode> {
@@ -139,7 +160,7 @@ async fn real_main() -> Result<ExitCode> {
 
     let mut buf = vec![];
     {
-        let mut file = File::open(&args.urls).context("Could not open urls file")?;
+        let mut file = File::open(&args.config).context("Could not open urls file")?;
         file.read_to_end(&mut buf)
             .context("Could not read urls file")?;
     }
@@ -151,7 +172,7 @@ async fn real_main() -> Result<ExitCode> {
     let client: Client<_, hyper::Body> =
         hyper::Client::builder().build(hyper_tls::HttpsConnector::new());
 
-    'url_loop: for info in urls {
+    for info in urls {
         let todo = Arc::new(AtomicU64::from(info.count));
         let error_encountered = Arc::new(AtomicBool::new(false));
 
@@ -296,7 +317,7 @@ async fn real_main() -> Result<ExitCode> {
         }
 
         if any_failed {
-                    return Ok(ExitCode::FAILURE);
+            return Ok(ExitCode::FAILURE);
         }
 
         assert_eq!(done, info.count);
