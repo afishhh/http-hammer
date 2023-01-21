@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fs::File,
     io::{Read, Write},
     path::PathBuf,
@@ -12,111 +12,11 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use hyper::{header::HeaderName, http::HeaderValue, Body, Client, HeaderMap, Method, Request, Uri};
-use serde::Deserialize;
+use config::HammerFile;
+use hyper::{Body, Client, Request};
 
-#[derive(Debug, Clone, Deserialize)]
-struct HammerFile {
-    hammer: Vec<HammerInfo>,
-}
-
-#[derive(Debug, Clone)]
-struct HammerInfo {
-    name: String,
-    uri: Uri,
-    method: Method,
-    headers: HeaderMap,
-    body: String,
-    count: u64,
-    max_concurrency: Option<u64>,
-}
-
-impl<'de> Deserialize<'de> for HammerInfo {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct HammerInfoRaw {
-            name: Option<String>,
-            uri: String,
-            method: Option<String>,
-            headers: Option<HashMap<String, String>>,
-            #[serde(default = "String::new")]
-            body: String,
-            count: u64,
-            max_concurrency: Option<u64>,
-        }
-
-        struct Expected {
-            text: &'static str,
-        }
-        impl Expected {
-            fn new(text: &'static str) -> Self {
-                Self { text }
-            }
-        }
-        impl serde::de::Expected for Expected {
-            fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(formatter, "{}", self.text)
-            }
-        }
-
-        let raw = HammerInfoRaw::deserialize(deserializer)?;
-
-        // FIXME: The error messages here aren't very informative
-        let parsed_uri: Uri = raw.uri.parse().map_err(|_| {
-            serde::de::Error::invalid_value(
-                serde::de::Unexpected::Str(&raw.uri),
-                &Expected::new("a valid url"),
-            )
-        })?;
-        let parsed_method = match raw.method {
-            Some(method) => method.parse().map_err(|_| {
-                serde::de::Error::invalid_value(
-                    serde::de::Unexpected::Str(&method),
-                    &Expected::new("an http method"),
-                )
-            })?,
-            None => Method::GET,
-        };
-        Ok(HammerInfo {
-            name: raw
-                .name
-                .unwrap_or_else(|| format!("{parsed_method} {parsed_uri}")),
-            uri: parsed_uri,
-            method: parsed_method,
-            headers: match raw.headers {
-                Some(headers) => {
-                    let mut new = HeaderMap::new();
-
-                    for (name, value) in headers.into_iter() {
-                        new.insert(
-                            HeaderName::try_from(&name).map_err(|_| {
-                                serde::de::Error::invalid_value(
-                                    serde::de::Unexpected::Str(&name),
-                                    &Expected::new("a valid http header name"),
-                                )
-                            })?,
-                            HeaderValue::try_from(&value).map_err(|_| {
-                                serde::de::Error::invalid_value(
-                                    serde::de::Unexpected::Str(&value),
-                                    &Expected::new("a valid http header value"),
-                                )
-                            })?,
-                        );
-                    }
-
-                    new
-                }
-                None => HeaderMap::new(),
-            },
-            body: raw.body,
-            count: raw.count,
-            max_concurrency: raw.max_concurrency,
-        })
-    }
-}
+mod config;
+mod cookie;
 
 #[derive(clap::Parser)]
 #[command(about, version)]
