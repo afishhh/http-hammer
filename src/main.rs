@@ -119,12 +119,13 @@ impl<'de> Deserialize<'de> for HammerInfo {
 }
 
 #[derive(clap::Parser)]
+#[command(about, version)]
 struct Args {
     /// Specify how many tasks to use for hammering.
     #[arg(long, short, default_value_t = 1, value_parser = clap::value_parser!(u64).range(0..))]
     tasks: u64,
 
-    /// TOML file with hammering instructions.
+    /// TOML file with hammering configuration.
     ///
     /// # Format
     /// It should contain an array of tables called "hammer" where each table should have the

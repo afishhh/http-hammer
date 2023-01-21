@@ -1,5 +1,6 @@
 [package]
 name = "http-hammer"
+description = "A simple tool for hammering HTTP endpoints"
 version = "0.1.0"
 edition = "2021"
 
