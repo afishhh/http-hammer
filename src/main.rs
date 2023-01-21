@@ -35,17 +35,22 @@ struct Args {
     ///
     /// It can also have these optional properties:
     ///     'method': a string containing the HTTP method to use
+    ///     'cookies': a cookie name -> cookie value map
     ///     'headers': a header name -> header value map
     ///     'body': a string used as the body for the request
     ///     'name': a string displayed while hammering instead of the default `${METHOD} ${URI}` name
     ///     'max_concurrency': a number representing the maximum number of tasks that should be used
     ///                        to hammer the url
     ///
+    /// Also optionally, a 'cookies' table may be specified at the top level which will be
+    /// propagated to all other entries in the file.
+    ///
     /// # Example entry
     /// [[hammer]]
     /// name = "my endpoint"
     /// uri = "http://127.0.0.1:8000/do_something"
     /// method = "POST"
+    /// cookie = { "some-cookie" = "value" }
     /// headers = { "Content-Type" = "application/json" }
     /// body = '''
     ///   { "do":"thing" }
