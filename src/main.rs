@@ -139,12 +139,8 @@ async fn real_main() -> Result<()> {
 
     let urls = toml::de::from_slice::<HammerFile>(&buf).context("Could not parse urls file")?.hammer;
 
-    // let client: Client<_, hyper::Body> =
-    //     hyper::Client::builder().build(hyper_tls::HttpsConnector::new());
-    let clients: Vec<Client<_, hyper::Body>> =
-        std::iter::repeat_with(|| hyper::Client::builder().build(hyper_tls::HttpsConnector::new()))
-            .take(args.tasks as usize)
-            .collect();
+    let client: Client<_, hyper::Body> =
+        hyper::Client::builder().build(hyper_tls::HttpsConnector::new());
 
     for info in urls {
         let todo = Arc::new(AtomicU64::from(info.count));
@@ -154,7 +150,7 @@ async fn real_main() -> Result<()> {
 
         for tidx in 0..args.tasks {
             let info = info.clone();
-            let client = clients[tidx as usize].clone();
+            let client = client.clone();
             let todo = todo.clone();
             let error_encountered = error_encountered.clone();
             let error_encountered2 = error_encountered.clone();
