@@ -8,8 +8,16 @@ pub struct Cookie {
 }
 
 impl Cookie {
-    pub fn extend(&mut self, iterator: impl Iterator<Item = (String, String)>) {
-        self.cookies.extend(iterator);
+    pub fn is_empty(&self) -> bool {
+        self.cookies.is_empty()
+    }
+
+    pub fn insert(&mut self, name: String, value: String) -> Option<String> {
+        self.cookies.insert(name, value)
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<String> {
+        self.cookies.remove(name)
     }
 
     pub fn to_header_value(&self) -> HeaderValue {

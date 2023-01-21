@@ -34,12 +34,37 @@ impl<'de> Deserialize<'de> for HammerFile {
     }
 }
 
+enum CookieValue {
+    Delete,
+    Set(String),
+}
+
+impl<'de> Deserialize<'de> for CookieValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            MapNull(HashMap<(), ()>),
+            String(String),
+        }
+
+        // FIXME: This error message is terrible
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::MapNull(_) => Self::Delete,
+            Raw::String(value) => Self::Set(value),
+        })
+    }
+}
+
 #[derive(Deserialize)]
 struct HammerInfoRaw {
     name: Option<String>,
     uri: String,
     method: Option<String>,
-    cookies: Option<HashMap<String, String>>,
+    cookies: Option<HashMap<String, CookieValue>>,
     headers: Option<HashMap<String, String>>,
     #[serde(default = "String::new")]
     body: String,
@@ -117,7 +142,15 @@ impl<'de> HammerInfo {
         }
 
         if let Some(cookies) = raw.cookies {
-            cookie.extend(cookies.into_iter());
+            for (name, value) in cookies {
+                match value {
+                    CookieValue::Delete => cookie.remove(&name),
+                    CookieValue::Set(value) => cookie.insert(name, value),
+                };
+            }
+        }
+
+        if !cookie.is_empty() {
             new_headers.insert(hyper::header::COOKIE, cookie.to_header_value());
         }
 
