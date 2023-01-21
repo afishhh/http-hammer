@@ -28,7 +28,7 @@ struct HammerInfo {
     headers: HeaderMap,
     body: String,
     count: u64,
-    max_concurrent: Option<u64>,
+    max_concurrency: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for HammerInfo {
@@ -45,7 +45,7 @@ impl<'de> Deserialize<'de> for HammerInfo {
             #[serde(default = "String::new")]
             body: String,
             count: u64,
-            max_concurrent: Option<u64>,
+            max_concurrency: Option<u64>,
         }
 
         struct Expected {
@@ -113,7 +113,7 @@ impl<'de> Deserialize<'de> for HammerInfo {
             },
             body: raw.body,
             count: raw.count,
-            max_concurrent: raw.max_concurrent,
+            max_concurrency: raw.max_concurrency,
         })
     }
 }
@@ -138,8 +138,8 @@ struct Args {
     ///     'headers': a header name -> header value map
     ///     'body': a string used as the body for the request
     ///     'name': a string displayed while hammering instead of the default `${METHOD} ${URI}` name
-    ///     'max_concurrent': a number representing the maximum number of tasks that should be used
-    ///                       to hammer the url
+    ///     'max_concurrency': a number representing the maximum number of tasks that should be used
+    ///                        to hammer the url
     ///
     /// # Example entry
     /// [[hammer]]
@@ -151,7 +151,7 @@ struct Args {
     ///   { "do":"thing" }
     /// '''
     /// count = 20000
-    /// max_concurrent = 10
+    /// max_concurrency = 10
     #[arg(verbatim_doc_comment)]
     config: PathBuf,
 }
@@ -180,7 +180,7 @@ async fn real_main() -> Result<ExitCode> {
         let mut handles = vec![];
 
         let tasks = info
-            .max_concurrent
+            .max_concurrency
             .map(|x| x.min(args.tasks))
             .unwrap_or(args.tasks);
         for _ in 0..tasks {
