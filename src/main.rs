@@ -63,6 +63,67 @@ struct Args {
     config: PathBuf,
 }
 
+struct TimeStats {
+    pub max: std::time::Duration,
+    pub min: std::time::Duration,
+    pub sum: std::time::Duration,
+    pub done: u64,
+}
+
+impl TimeStats {
+    fn add(&mut self, dur: std::time::Duration) {
+        self.max = std::cmp::max(self.max, dur);
+        self.min = std::cmp::min(self.min, dur);
+        self.sum += dur;
+        self.done += 1;
+    }
+
+    fn min_secs(&self) -> f64 {
+        self.min.as_secs_f64()
+    }
+
+    fn avg_secs(&self) -> f64 {
+        self.sum.as_secs_f64() / self.done as f64
+    }
+
+    fn max_secs(&self) -> f64 {
+        self.max.as_secs_f64()
+    }
+
+    fn append(&mut self, rhs: Self) {
+        self.max = std::cmp::max(self.max, rhs.max);
+        self.min = std::cmp::min(self.min, rhs.min);
+        self.sum += rhs.sum;
+        self.done += rhs.done;
+    }
+}
+
+impl Default for TimeStats {
+    fn default() -> Self {
+        Self {
+            max: std::time::Duration::ZERO,
+            min: std::time::Duration::MAX,
+            sum: std::time::Duration::ZERO,
+            done: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct HammerStats {
+    // For the (request sent)-(response received) time period
+    pub response: TimeStats,
+    // For the (request sent)-(body received) time period
+    pub total: TimeStats,
+}
+
+impl HammerStats {
+    fn append(&mut self, other: Self) {
+        self.response.append(other.response);
+        self.total.append(other.total);
+    }
+}
+
 async fn real_main() -> Result<ExitCode> {
     let args = Args::parse();
 
@@ -99,10 +160,7 @@ async fn real_main() -> Result<ExitCode> {
 
             handles.push(tokio::spawn(async move {
                 let result = (|| async move {
-                    let mut max = std::time::Duration::ZERO;
-                    let mut min = std::time::Duration::MAX;
-                    let mut sum = std::time::Duration::ZERO;
-                    let mut done: u64 = 0;
+                    let mut stats = HammerStats::default();
 
                     while todo
                         .fetch_update(Ordering::Release, Ordering::Relaxed, |x| x.checked_sub(1))
@@ -122,6 +180,9 @@ async fn real_main() -> Result<ExitCode> {
                         let start = std::time::Instant::now();
 
                         let response = client.request(request).await?;
+
+                        let responded = std::time::Instant::now();
+
                         if !response.status().is_success() {
                             bail!(
                                 "GET {} returned non-200 status code {}",
@@ -129,18 +190,16 @@ async fn real_main() -> Result<ExitCode> {
                                 response.status()
                             );
                         }
+
                         hyper::body::to_bytes(response.into_body()).await?;
 
                         let end = std::time::Instant::now();
-                        let dur = end - start;
 
-                        max = std::cmp::max(max, dur);
-                        min = std::cmp::min(min, dur);
-                        sum += dur;
-                        done += 1;
+                        stats.response.add(responded - start);
+                        stats.total.add(end - start);
                     }
 
-                    Ok((min, sum, done, max)) as anyhow::Result<_>
+                    Ok(stats) as anyhow::Result<HammerStats>
                 })()
                 .await;
 
@@ -203,20 +262,11 @@ async fn real_main() -> Result<ExitCode> {
             );
         }
 
-        let mut max = std::time::Duration::ZERO;
-        let mut min = std::time::Duration::MAX;
-        let mut sum = std::time::Duration::ZERO;
-        let mut done = 0;
-
+        let mut stats = HammerStats::default();
         let mut any_failed = false;
         for (tidx, handle) in handles.into_iter().enumerate() {
             match handle.await? {
-                Ok((tmin, tsum, tdone, tmax)) => {
-                    max = std::cmp::max(max, tmax);
-                    min = std::cmp::min(min, tmin);
-                    sum += tsum;
-                    done += tdone;
-                }
+                Ok(htr) => stats.append(htr),
                 Err(e) => {
                     eprintln!("    Task {} \x1b[31;1mfailed\x1b[0m: {e}", tidx + 1);
                     any_failed = true;
@@ -228,14 +278,20 @@ async fn real_main() -> Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
 
-        assert_eq!(done, info.count);
+        assert_eq!(stats.total.done, info.count);
 
-        println!("Results for {}:", info.uri);
         println!(
-            "    min {:.2}ms avg {:.2}ms max {:.2}ms",
-            min.as_secs_f64() * 1000.0,
-            (sum.as_secs_f64() / done as f64) * 1000.0,
-            max.as_secs_f64() * 1000.0,
+            "    Initial response: min {:.2}ms avg {:.2}ms max {:.2}ms",
+            stats.response.min_secs() * 1000.0,
+            stats.response.avg_secs() * 1000.0,
+            stats.response.max_secs() * 1000.0,
+        );
+
+        println!(
+            "    Whole body: min {:.2}ms avg {:.2}ms max {:.2}ms",
+            stats.total.min_secs() * 1000.0,
+            stats.total.avg_secs() * 1000.0,
+            stats.total.max_secs() * 1000.0,
         );
     }
 
