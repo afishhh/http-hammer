@@ -36,6 +36,8 @@ struct Args {
     /// It can also have these optional properties:
     ///     'method': a string containing the HTTP method to use
     ///     'cookies': a cookie name -> cookie value map
+    ///                a cookie value may also be '{}' which unsets that cookie if it was
+    ///                previously set in the global cookies table
     ///     'headers': a header name -> header value map
     ///     'body': a string used as the body for the request
     ///     'name': a string displayed while hammering instead of the default `${METHOD} ${URI}` name
