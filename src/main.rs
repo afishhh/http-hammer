@@ -13,7 +13,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use config::HammerFile;
-use hyper::{Body, Client, Request};
+use hyper::{client::connect::Connect, Body, Client, Request};
 
 mod config;
 mod cookie;
@@ -124,22 +124,36 @@ impl HammerStats {
     }
 }
 
+fn hyper_connector() -> impl Connect + Clone {
+    #[cfg(feature = "nativels")]
+    return hyper_tls::HttpsConnector::new();
+
+    #[cfg(feature = "rustls")]
+    return hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_or_http()
+        .enable_http1()
+        .build();
+
+    #[cfg(all(not(feature = "rustls"), not(feature = "nativels")))]
+    return hyper::client::HttpConnector::new();
+}
+
 async fn real_main() -> Result<ExitCode> {
     let args = Args::parse();
 
-    let mut buf = vec![];
+    let mut buf = String::new();
     {
         let mut file = File::open(&args.config).context("Could not open urls file")?;
-        file.read_to_end(&mut buf)
+        file.read_to_string(&mut buf)
             .context("Could not read urls file")?;
     }
 
-    let urls = toml::de::from_slice::<HammerFile>(&buf)
+    let urls = toml::from_str::<HammerFile>(&buf)
         .context("Could not parse urls file")?
         .hammer;
 
-    let client: Client<_, hyper::Body> =
-        hyper::Client::builder().build(hyper_tls::HttpsConnector::new());
+    let client: Client<_, hyper::Body> = hyper::Client::builder().build(hyper_connector());
 
     for info in urls {
         let todo = Arc::new(AtomicU64::from(info.count));
