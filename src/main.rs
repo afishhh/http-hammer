@@ -18,6 +18,8 @@ use hyper::{client::connect::Connect, Body, Client, Request};
 mod config;
 mod cookie;
 
+const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), " v", env!("CARGO_PKG_VERSION"));
+
 #[derive(clap::Parser)]
 #[command(about, version)]
 struct Args {
@@ -188,7 +190,12 @@ async fn real_main() -> Result<ExitCode> {
 
                             *request.headers_mut().unwrap() = info.headers.clone();
 
-                            request.body(Body::from(info.body.clone()))?
+                            request
+                                .header(
+                                    hyper::header::USER_AGENT,
+                                    hyper::http::HeaderValue::from_static(USER_AGENT),
+                                )
+                                .body(Body::from(info.body.clone()))?
                         };
 
                         let start = std::time::Instant::now();
