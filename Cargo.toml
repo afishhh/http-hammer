@@ -2,6 +2,7 @@
 name = "http-hammer"
 description = "A simple tool for hammering HTTP endpoints"
 version = "0.1.1"
+license = "Apache-2.0 OR MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
