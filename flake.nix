@@ -22,7 +22,7 @@
           http-hammer = self.packages."${system}".default;
         };
         devShell = with pkgs; mkShell {
-          buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy ];
+          buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy openssl pkg-config ];
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
         };
       });
