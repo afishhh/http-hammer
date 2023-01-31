@@ -12,11 +12,11 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use config::HammerFile;
-use hyper::{client::connect::Connect, Body, Client, Request};
+use hyper::{client::connect::Connect, Client};
 
+mod cli;
 mod config;
 mod cookie;
-mod cli;
 use cli::Args;
 
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), " v", env!("CARGO_PKG_VERSION"));
@@ -107,7 +107,7 @@ async fn real_main() -> Result<ExitCode> {
             .context("Could not read urls file")?;
     }
 
-    let urls = toml::from_str::<HammerFile>(&buf)
+    let urls = HammerFile::parse_toml(&buf)
         .context("Could not parse urls file")?
         .hammer;
 
@@ -139,20 +139,7 @@ async fn real_main() -> Result<ExitCode> {
                         .is_ok()
                         && !error_encountered2.load(Ordering::Relaxed)
                     {
-                        let request = {
-                            let mut request = Request::builder()
-                                .method(info.method.clone())
-                                .uri(info.uri.clone());
-
-                            *request.headers_mut().unwrap() = info.headers.clone();
-
-                            request
-                                .header(
-                                    hyper::header::USER_AGENT,
-                                    hyper::http::HeaderValue::from_static(USER_AGENT),
-                                )
-                                .body(Body::from(info.body.clone()))?
-                        };
+                        let request = info.request.clone().into();
 
                         let start = std::time::Instant::now();
 
@@ -162,8 +149,9 @@ async fn real_main() -> Result<ExitCode> {
 
                         if !response.status().is_success() {
                             bail!(
-                                "GET {} returned non-200 status code {}",
-                                info.uri,
+                                "{} {} returned non-200 status code {}",
+                                info.request.method,
+                                info.request.uri,
                                 response.status()
                             );
                         }

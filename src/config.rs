@@ -1,167 +1,111 @@
 use std::collections::HashMap;
 
-use hyper::{header::HeaderName, http::HeaderValue, HeaderMap, Method, Uri};
+use hyper::{HeaderMap, Method, Request, Uri};
 use serde::Deserialize;
 
-use crate::cookie::Cookie;
+use crate::{
+    cookie::{Cookie, CookieValue},
+    USER_AGENT,
+};
+
+mod serde_http;
 
 #[derive(Debug, Clone)]
 pub struct HammerFile {
     pub hammer: Vec<HammerInfo>,
 }
 
-impl<'de> Deserialize<'de> for HammerFile {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
+impl HammerFile {
+    pub fn parse_toml(text: &str) -> Result<HammerFile, toml::de::Error> {
         #[derive(Deserialize)]
-        struct HammerFileRaw {
+        struct Raw {
             #[serde(default)]
             cookies: HashMap<String, String>,
-            hammer: Vec<HammerInfoRaw>,
+            hammer: Vec<HammerInfo>,
         }
 
-        let raw = HammerFileRaw::deserialize(deserializer)?;
-        let base_cookie = Cookie::from(raw.cookies);
+        let raw: Raw = toml::from_str(text)?;
+        let mut hammers = raw.hammer;
 
-        let mut hammer = vec![];
-        for raw_hammer in raw.hammer {
-            hammer.push(HammerInfo::from_raw::<D>(raw_hammer, base_cookie.clone())?);
+        for hammer in hammers.iter_mut() {
+            let other_cookie = &mut hammer.request.cookie;
+
+            for (key, value) in raw.cookies.iter() {
+                other_cookie
+                    .entry(key.to_string())
+                    .or_insert_with(|| CookieValue::Set(value.to_string()));
+            }
         }
 
-        Ok(HammerFile { hammer })
+        Ok(HammerFile { hammer: hammers })
     }
 }
 
-enum CookieValue {
-    Delete,
-    Set(String),
+fn method_get() -> Method {
+    Method::GET
 }
 
-impl<'de> Deserialize<'de> for CookieValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            MapNull(HashMap<(), ()>),
-            String(String),
-        }
-
-        // FIXME: This error message is terrible
-        Ok(match Raw::deserialize(deserializer)? {
-            Raw::MapNull(_) => Self::Delete,
-            Raw::String(value) => Self::Set(value),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct HammerInfoRaw {
-    name: Option<String>,
-    uri: String,
-    method: Option<String>,
-    cookies: Option<HashMap<String, CookieValue>>,
-    headers: Option<HashMap<String, String>>,
+#[derive(Debug, Clone, Deserialize)]
+pub struct RequestInfo {
+    #[serde(with = "serde_http::uri")]
+    pub uri: Uri,
+    #[serde(with = "serde_http::method", default = "method_get")]
+    pub method: Method,
+    #[serde(rename = "cookies", default = "Cookie::new")]
+    pub cookie: Cookie,
+    #[serde(with = "serde_http::header_map", default = "HeaderMap::new")]
+    pub headers: HeaderMap,
     #[serde(default = "String::new")]
-    body: String,
-    count: u64,
-    max_concurrency: Option<u64>,
+    pub body: String,
+}
+
+impl From<RequestInfo> for Request<hyper::Body> {
+    fn from(val: RequestInfo) -> Self {
+        let mut request = Request::builder().method(val.method).uri(val.uri);
+
+        *request.headers_mut().unwrap() = val.headers;
+
+        request
+            // FIXME: Theoretically the cookie conversion is unnecessarily executed many times here
+            .header(hyper::header::COOKIE, val.cookie.as_header_value())
+            .header(
+                hyper::header::USER_AGENT,
+                hyper::http::HeaderValue::from_static(USER_AGENT),
+            )
+            .body(hyper::Body::from(val.body))
+            .unwrap()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct HammerInfo {
     pub name: String,
-    pub uri: Uri,
-    pub method: Method,
-    pub headers: HeaderMap,
-    pub body: String,
+    pub request: RequestInfo,
     pub count: u64,
     pub max_concurrency: Option<u64>,
 }
 
-impl<'de> HammerInfo {
-    // FIXME: This error handling is messy
-    fn from_raw<D: serde::Deserializer<'de>>(
-        raw: HammerInfoRaw,
-        mut cookie: Cookie,
-    ) -> std::result::Result<Self, D::Error> {
-        struct Expected {
-            text: &'static str,
-        }
-        impl Expected {
-            fn new(text: &'static str) -> Self {
-                Self { text }
-            }
-        }
-        impl serde::de::Expected for Expected {
-            fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(formatter, "{}", self.text)
-            }
+impl<'de> Deserialize<'de> for HammerInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            name: Option<String>,
+            #[serde(flatten)]
+            request: RequestInfo,
+            count: u64,
+            max_concurrency: Option<u64>,
         }
 
-        // FIXME: The error messages here aren't very informative
-        let parsed_uri: Uri = raw.uri.parse().map_err(|_| {
-            serde::de::Error::invalid_value(
-                serde::de::Unexpected::Str(&raw.uri),
-                &Expected::new("a valid url"),
-            )
-        })?;
-        let parsed_method = match raw.method {
-            Some(method) => method.parse().map_err(|_| {
-                serde::de::Error::invalid_value(
-                    serde::de::Unexpected::Str(&method),
-                    &Expected::new("an http method"),
-                )
-            })?,
-            None => Method::GET,
-        };
-
-        let mut new_headers = HeaderMap::new();
-
-        if let Some(headers) = raw.headers {
-            for (name, value) in headers.into_iter() {
-                new_headers.insert(
-                    HeaderName::try_from(&name).map_err(|_| {
-                        serde::de::Error::invalid_value(
-                            serde::de::Unexpected::Str(&name),
-                            &Expected::new("a valid http header name"),
-                        )
-                    })?,
-                    HeaderValue::try_from(&value).map_err(|_| {
-                        serde::de::Error::invalid_value(
-                            serde::de::Unexpected::Str(&value),
-                            &Expected::new("a valid http header value"),
-                        )
-                    })?,
-                );
-            }
-        }
-
-        if let Some(cookies) = raw.cookies {
-            for (name, value) in cookies {
-                match value {
-                    CookieValue::Delete => cookie.remove(&name),
-                    CookieValue::Set(value) => cookie.insert(name, value),
-                };
-            }
-        }
-
-        if !cookie.is_empty() {
-            new_headers.insert(hyper::header::COOKIE, cookie.to_header_value());
-        }
+        let raw = Raw::deserialize(deserializer)?;
 
         Ok(HammerInfo {
             name: raw
                 .name
-                .unwrap_or_else(|| format!("{parsed_method} {parsed_uri}")),
-            uri: parsed_uri,
-            method: parsed_method,
-            headers: new_headers,
-            body: raw.body,
+                .unwrap_or_else(|| format!("{} {}", raw.request.method, raw.request.uri)),
+            request: raw.request,
             count: raw.count,
             max_concurrency: raw.max_concurrency,
         })
