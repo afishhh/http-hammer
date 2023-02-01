@@ -88,74 +88,18 @@ pub mod header_name {
     }
 }
 
-pub mod header_value {
-    use hyper::header::HeaderValue;
-    use serde::{
-        de::{Error, Expected, SeqAccess, Unexpected},
-        Deserializer,
-    };
-
-    pub fn deserialize<'de, D>(de: D) -> Result<HeaderValue, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = HeaderValue;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(formatter, "a valid header value")
-            }
-
-            fn visit_str<E: Error>(self, val: &str) -> Result<Self::Value, E> {
-                val.parse()
-                    .map_err(|_| Error::invalid_value(Unexpected::Str(val), &self))
-            }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
-                struct ByteExpected;
-                impl Expected for ByteExpected {
-                    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        write!(f, "a valid header value byte")
-                    }
-                }
-
-                let mut out = vec![];
-
-                while let Some(value) = access.next_element::<u8>()? {
-                    // HeaderValue::from_bytes documentation says that only 32-255 \ 127 bytes
-                    // are permitted in header values.
-                    if (32..=255).contains(&value) && value != 127 {
-                        out.push(value);
-                    } else {
-                        return Err(Error::invalid_value(
-                            Unexpected::Unsigned(value.into()),
-                            &ByteExpected,
-                        ));
-                    }
-                }
-
-                Ok(HeaderValue::try_from(out).unwrap())
-            }
-        }
-
-        de.deserialize_any(Visitor)
-    }
-}
-
-pub mod header_map {
-    use hyper::{header::HeaderName, http::HeaderValue, HeaderMap};
+pub mod generic_header_map {
+    use hyper::{header::HeaderName, HeaderMap};
     use serde::{de::MapAccess, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(de: D) -> Result<HeaderMap, D::Error>
+    pub fn deserialize<'de, D, V: Deserialize<'de> + 'de>(de: D) -> Result<HeaderMap<V>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct Visitor;
+        struct Visitor<'de, V: Deserialize<'de>>(std::marker::PhantomData<&'de V>);
 
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = HeaderMap;
+        impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for Visitor<'de, V> {
+            type Value = HeaderMap<V>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(formatter, "a valid uri")
@@ -167,21 +111,16 @@ pub mod header_map {
                     #[serde(with = "crate::config::serde_http::header_name")] HeaderName,
                 );
 
-                #[derive(Deserialize)]
-                struct WrappedValue(
-                    #[serde(with = "crate::config::serde_http::header_value")] HeaderValue,
-                );
+                let mut headers = HeaderMap::<V>::default();
 
-                let mut headers = HeaderMap::new();
-
-                while let Some((name, value)) = access.next_entry::<WrappedName, WrappedValue>()? {
-                    headers.insert(name.0, value.0);
+                while let Some((name, value)) = access.next_entry::<WrappedName, V>()? {
+                    headers.insert(name.0, value);
                 }
 
                 Ok(headers)
             }
         }
 
-        de.deserialize_map(Visitor)
+        de.deserialize_map(Visitor(Default::default()))
     }
 }

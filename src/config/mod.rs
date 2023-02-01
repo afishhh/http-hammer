@@ -1,17 +1,22 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash, sync::Arc};
 
-use hyper::{HeaderMap, Method, Request, Uri};
+use anyhow::{Context, Result};
+use async_recursion::async_recursion;
+use hyper::{
+    client::connect::Connect, header::COOKIE, http::HeaderValue, HeaderMap, Method, Request, Uri,
+};
 use serde::Deserialize;
 
-use crate::{
-    cookie::{Cookie, CookieValue},
-    USER_AGENT,
-};
+use crate::{config::eval::Value, cookie::Cookie, USER_AGENT};
 
-mod serde_http;
+pub mod eval;
+pub mod format;
+pub mod serde_http;
+use eval::{Evaluator, MaybeDeleted};
 
 #[derive(Debug, Clone)]
 pub struct HammerFile {
+    pub resources: HashMap<String, Value>,
     pub hammer: Vec<HammerInfo>,
 }
 
@@ -21,6 +26,7 @@ impl HammerFile {
         struct Raw {
             #[serde(default)]
             cookies: HashMap<String, String>,
+            resources: HashMap<String, Value>,
             hammer: Vec<HammerInfo>,
         }
 
@@ -28,16 +34,19 @@ impl HammerFile {
         let mut hammers = raw.hammer;
 
         for hammer in hammers.iter_mut() {
-            let other_cookie = &mut hammer.request.cookie;
+            let other_cookie = &mut hammer.request.cookies;
 
             for (key, value) in raw.cookies.iter() {
                 other_cookie
                     .entry(key.to_string())
-                    .or_insert_with(|| CookieValue::Set(value.to_string()));
+                    .or_insert_with(|| MaybeDeleted::Value(value.to_string().into()));
             }
         }
 
-        Ok(HammerFile { hammer: hammers })
+        Ok(HammerFile {
+            resources: raw.resources,
+            hammer: hammers,
+        })
     }
 }
 
@@ -51,29 +60,145 @@ pub struct RequestInfo {
     pub uri: Uri,
     #[serde(with = "serde_http::method", default = "method_get")]
     pub method: Method,
-    #[serde(rename = "cookies", default = "Cookie::new")]
-    pub cookie: Cookie,
-    #[serde(with = "serde_http::header_map", default = "HeaderMap::new")]
-    pub headers: HeaderMap,
-    #[serde(default = "String::new")]
+    #[serde(default = "HashMap::new")]
+    pub cookies: HashMap<String, MaybeDeleted>,
+    #[serde(with = "serde_http::generic_header_map", default)]
+    pub headers: HeaderMap<MaybeDeleted>,
+    #[serde(default)]
     pub body: String,
 }
 
-impl From<RequestInfo> for Request<hyper::Body> {
-    fn from(val: RequestInfo) -> Self {
+#[derive(Clone, PartialEq, Eq)]
+/// A type that is not an [`http::Request`](hyper::http::Request) but can be cheaply converted to
+/// one while also implementing [`Clone`].
+pub struct AlmostRequest {
+    uri: Uri,
+    method: Method,
+    headers: HeaderMap,
+    body: String,
+}
+
+impl RequestInfo {
+    #[async_recursion]
+    pub async fn build<C: Connect + Clone + Send + Sync + 'static>(
+        self,
+        evaluator: Arc<Evaluator<C>>,
+    ) -> Result<AlmostRequest> {
+        let mut headers = HeaderMap::new();
+
+        if evaluator.verbose {
+            eprintln!("Building request {} {}", self.method, self.uri);
+        }
+
+        {
+            let mut cookie = Cookie::new();
+
+            for (name, value) in self.cookies {
+                cookie.add(
+                    &name,
+                    &match value {
+                        MaybeDeleted::Deleted(_) => continue,
+                        MaybeDeleted::Value(value) => {
+                            if evaluator.verbose {
+                                eprintln!("Resolving value for cookie {name}");
+                            }
+
+                            value.evaluate(evaluator.clone()).await.with_context(|| {
+                                format!("Failed to resolve value for cookie {name}")
+                            })?
+                        }
+                    },
+                )
+            }
+
+            headers.insert(COOKIE, cookie.into());
+        }
+
+        {
+            for (name, value) in self
+                .headers
+                .into_iter()
+                .filter_map(|(no, v)| no.map(|n| (n, v)))
+            {
+                let val = match value {
+                    MaybeDeleted::Deleted(_) => continue,
+                    MaybeDeleted::Value(value) => {
+                        if evaluator.verbose {
+                            eprintln!("Resolving value for header {name}");
+                        }
+
+                        value
+                            .evaluate(evaluator.clone())
+                            .await
+                            .with_context(|| format!("Failed to resolve value for header {name}"))?
+                    }
+                };
+                let hval = HeaderValue::try_from(val).with_context(|| {
+                    format!("Value for header {name} is not a valid header value")
+                })?;
+
+                headers.insert(name, hval);
+            }
+        }
+
+        Ok(AlmostRequest {
+            uri: self.uri,
+            method: self.method,
+            headers,
+            body: self.body,
+        })
+    }
+}
+
+// FIXME: This is not really a FIXME since this issue is very hard so solve differently.
+//        Implementing Hash for a HashMap is non-trivial but since this function is called
+//        infrequently so a naive slow solution was chosen.
+#[allow(clippy::derive_hash_xor_eq)]
+impl Hash for AlmostRequest {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.uri.hash(state);
+        self.method.hash(state);
+
+        {
+            let mut vec = self.headers.iter().collect::<Vec<_>>();
+            vec.sort_unstable_by(|a, b| {
+                use std::cmp::Ordering;
+
+                match a.0.as_str().cmp(b.0.as_str()) {
+                    ord @ (Ordering::Greater | Ordering::Less) => ord,
+                    Ordering::Equal => a.1.as_bytes().cmp(b.1.as_bytes()),
+                }
+            });
+            vec.hash(state);
+        }
+
+        self.body.hash(state);
+    }
+}
+
+impl From<AlmostRequest> for Request<hyper::Body> {
+    fn from(val: AlmostRequest) -> Self {
         let mut request = Request::builder().method(val.method).uri(val.uri);
 
         *request.headers_mut().unwrap() = val.headers;
 
         request
-            // FIXME: Theoretically the cookie conversion is unnecessarily executed many times here
-            .header(hyper::header::COOKIE, val.cookie.as_header_value())
             .header(
                 hyper::header::USER_AGENT,
                 hyper::http::HeaderValue::from_static(USER_AGENT),
             )
             .body(hyper::Body::from(val.body))
             .unwrap()
+    }
+}
+
+impl AlmostRequest {
+    pub fn method(&self) -> &Method {
+        &self.method
+    }
+
+    pub fn uri(&self) -> &Uri {
+        &self.uri
     }
 }
 

@@ -11,13 +11,14 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use config::HammerFile;
+use config::{eval::Evaluator, HammerFile};
 use hyper::{client::connect::Connect, Client};
 
 mod cli;
 mod config;
 mod cookie;
 use cli::Args;
+use tokio::sync::Mutex;
 
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), " v", env!("CARGO_PKG_VERSION"));
 
@@ -107,15 +108,33 @@ async fn real_main() -> Result<ExitCode> {
             .context("Could not read urls file")?;
     }
 
-    let urls = HammerFile::parse_toml(&buf)
-        .context("Could not parse urls file")?
-        .hammer;
+    let config = HammerFile::parse_toml(&buf).context("Could not parse urls file")?;
 
     let client: Client<_, hyper::Body> = hyper::Client::builder().build(hyper_connector());
+    let evaluator = Arc::new(Evaluator {
+        client: client.clone(),
+        verbose: args.verbose,
+        resources: config
+            .resources
+            .into_iter()
+            .map(|(n, v)| (n, Mutex::new(v)))
+            .collect(),
 
-    for info in urls {
+        request_cache: Default::default(),
+    });
+
+    for info in config.hammer {
         let todo = Arc::new(AtomicU64::from(info.count));
         let error_encountered = Arc::new(AtomicBool::new(false));
+
+        if args.verbose {
+            eprintln!("Evaluating {}", info.name);
+        }
+        let request = info
+            .request
+            .build(evaluator.clone())
+            .await
+            .with_context(|| format!("Failed to evaulate request for {}", info.name))?;
 
         let mut handles = vec![];
 
@@ -124,7 +143,9 @@ async fn real_main() -> Result<ExitCode> {
             .map(|x| x.min(args.tasks))
             .unwrap_or(args.tasks);
         for _ in 0..tasks {
-            let info = info.clone();
+            let request = request.clone();
+            let uri = request.uri().clone();
+            let method = request.method().clone();
             let client = client.clone();
             let todo = todo.clone();
             let error_encountered = error_encountered.clone();
@@ -139,7 +160,7 @@ async fn real_main() -> Result<ExitCode> {
                         .is_ok()
                         && !error_encountered2.load(Ordering::Relaxed)
                     {
-                        let request = info.request.clone().into();
+                        let request = request.clone().into();
 
                         let start = std::time::Instant::now();
 
@@ -149,9 +170,7 @@ async fn real_main() -> Result<ExitCode> {
 
                         if !response.status().is_success() {
                             bail!(
-                                "{} {} returned non-200 status code {}",
-                                info.request.method,
-                                info.request.uri,
+                                "{method} {uri} returned non-200 status code {}",
                                 response.status()
                             );
                         }

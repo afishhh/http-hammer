@@ -9,6 +9,10 @@ pub struct Args {
     #[arg(long, short, default_value_t = 1, value_parser = clap::value_parser!(u64).range(0..))]
     pub tasks: u64,
 
+    /// Turn on verbose logging
+    #[arg(long, short)]
+    pub verbose: bool,
+
     /// TOML file with hammering configuration.
     ///
     /// # Format
