@@ -49,22 +49,27 @@ pub async fn format_callback<FF: Future<Output = Result<String>>, F: FnMut(Strin
     let mut it = fmtstr.chars().peekable();
     loop {
         match (&mut state, it.next()) {
-            (State::Normal, Some('{')) => match it.peek() {
-                Some('{') => out.push('{'),
-                _ => {
+            (State::Normal, Some('$')) => match it.peek() {
+                Some('$') => out.push('$'),
+                Some('{') => {
+                    #[cfg(debug_assertions)]
+                    assert_eq!(it.next(), Some('{'));
+                    #[cfg(not(debug_assertions))]
+                    it.next();
+
                     state = State::Spec {
                         value: String::new(),
                     };
                 }
-            },
-            (State::Normal, Some('}')) => match it.peek() {
-                Some('}') => out.push('{'),
-                _ => bail!("Unmatched '}}', use '}}}}' for a signle '}}'"),
+                Some(c) => {
+                    bail!("Unexpected '{c}' encountered after '$', expected either '{{' or '$'")
+                }
+                None => bail!("Unexpected EOF encountered after '$'"),
             },
             (State::Normal, Some(c)) => out.push(c),
             (State::Normal, None) => break,
-            (State::Spec { .. }, Some('{')) => {
-                bail!("Format specifiers cannot contain '{{'")
+            (State::Spec { .. }, Some(c @ ('$' | '{'))) => {
+                bail!("Format specifiers cannot contain '{c}'")
             }
             (State::Spec { .. }, Some('}')) => {
                 let value = match std::mem::replace(&mut state, State::Normal) {
@@ -76,7 +81,7 @@ pub async fn format_callback<FF: Future<Output = Result<String>>, F: FnMut(Strin
             }
             (State::Spec { value }, Some(c)) => value.push(c),
             (State::Spec { .. }, None) => {
-                bail!("Unexpected EOF encountered in format string while parsing format specifier")
+                bail!("Unexpected EOF encountered while parsing format specifier")
             }
         }
     }

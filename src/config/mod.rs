@@ -26,6 +26,9 @@ impl HammerFile {
         struct Raw {
             #[serde(default)]
             cookies: HashMap<String, String>,
+            #[serde(with = "serde_http::generic_header_map", default)]
+            headers: HeaderMap<String>,
+            #[serde(default)]
             resources: HashMap<String, Value>,
             hammer: Vec<HammerInfo>,
         }
@@ -34,11 +37,19 @@ impl HammerFile {
         let mut hammers = raw.hammer;
 
         for hammer in hammers.iter_mut() {
-            let other_cookie = &mut hammer.request.cookies;
-
             for (key, value) in raw.cookies.iter() {
-                other_cookie
+                hammer
+                    .request
+                    .cookies
                     .entry(key.to_string())
+                    .or_insert_with(|| MaybeDeleted::Value(value.to_string().into()));
+            }
+
+            for (key, value) in raw.headers.iter() {
+                hammer
+                    .request
+                    .headers
+                    .entry(key)
                     .or_insert_with(|| MaybeDeleted::Value(value.to_string().into()));
             }
         }
@@ -54,6 +65,10 @@ fn method_get() -> Method {
     Method::GET
 }
 
+fn boxed_empty_value() -> Box<Value> {
+    Box::new(Value::empty())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RequestInfo {
     #[serde(with = "serde_http::uri")]
@@ -64,8 +79,9 @@ pub struct RequestInfo {
     pub cookies: HashMap<String, MaybeDeleted>,
     #[serde(with = "serde_http::generic_header_map", default)]
     pub headers: HeaderMap<MaybeDeleted>,
-    #[serde(default)]
-    pub body: String,
+    // This has to be boxed since a Value may eventually contain another Value
+    #[serde(default = "boxed_empty_value")]
+    pub body: Box<Value>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -86,7 +102,7 @@ impl RequestInfo {
     ) -> Result<AlmostRequest> {
         let mut headers = HeaderMap::new();
 
-        if evaluator.verbose {
+        if evaluator.verbose > 0 {
             eprintln!("Building request {} {}", self.method, self.uri);
         }
 
@@ -99,7 +115,7 @@ impl RequestInfo {
                     &match value {
                         MaybeDeleted::Deleted(_) => continue,
                         MaybeDeleted::Value(value) => {
-                            if evaluator.verbose {
+                            if evaluator.verbose > 0 {
                                 eprintln!("Resolving value for cookie {name}");
                             }
 
@@ -123,7 +139,7 @@ impl RequestInfo {
                 let val = match value {
                     MaybeDeleted::Deleted(_) => continue,
                     MaybeDeleted::Value(value) => {
-                        if evaluator.verbose {
+                        if evaluator.verbose > 0 {
                             eprintln!("Resolving value for header {name}");
                         }
 
@@ -145,7 +161,11 @@ impl RequestInfo {
             uri: self.uri,
             method: self.method,
             headers,
-            body: self.body,
+            body: self
+                .body
+                .evaluate(evaluator)
+                .await
+                .context("Failed to resolve value for body")?,
         })
     }
 }

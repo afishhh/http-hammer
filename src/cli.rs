@@ -10,8 +10,11 @@ pub struct Args {
     pub tasks: u64,
 
     /// Turn on verbose logging
-    #[arg(long, short)]
-    pub verbose: bool,
+    #[arg(
+        long, short, action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=2)
+    )]
+    pub verbose: u8,
 
     /// TOML file with hammering configuration.
     ///

@@ -13,7 +13,7 @@ use super::{
 
 pub struct Evaluator<C: Connect + Clone + Send + Sync + 'static> {
     pub client: hyper::Client<C>,
-    pub verbose: bool,
+    pub verbose: u8,
     pub resources: HashMap<String, Mutex<Value>>,
     pub request_cache: Mutex<HashMap<AlmostRequest, String>>,
 }
@@ -42,6 +42,12 @@ pub enum Value {
     Request(FromResponseBody),
 }
 
+impl Value {
+    pub fn empty() -> Self {
+        Self::Constant(String::new())
+    }
+}
+
 impl From<String> for Value {
     fn from(val: String) -> Self {
         // This is just a heuristic, no need to be 100% accurate
@@ -66,7 +72,7 @@ impl FromResponseBody {
         let body: &str = match cache.get(&request) {
             Some(string) => string,
             None => {
-                if evaluator.verbose {
+                if evaluator.verbose > 0 {
                     eprintln!("Executing {} {}", request.method(), request.uri());
                 }
 
@@ -82,6 +88,10 @@ impl FromResponseBody {
                 cache.get(&request).unwrap()
             }
         };
+
+        if evaluator.verbose > 1 {
+            eprintln!("Response: '{}'", body);
+        }
 
         let extracted = match self.extract {
             Some(BodyExtract::Json { pointer }) => {

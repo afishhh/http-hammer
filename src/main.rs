@@ -127,7 +127,7 @@ async fn real_main() -> Result<ExitCode> {
         let todo = Arc::new(AtomicU64::from(info.count));
         let error_encountered = Arc::new(AtomicBool::new(false));
 
-        if args.verbose {
+        if args.verbose > 0 {
             eprintln!("Evaluating {}", info.name);
         }
         let request = info

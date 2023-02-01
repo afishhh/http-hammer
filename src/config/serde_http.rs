@@ -89,10 +89,10 @@ pub mod header_name {
 }
 
 pub mod generic_header_map {
-    use hyper::{header::HeaderName, HeaderMap};
+    use hyper::{HeaderMap, header::HeaderName};
     use serde::{de::MapAccess, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D, V: Deserialize<'de> + 'de>(de: D) -> Result<HeaderMap<V>, D::Error>
+    pub fn deserialize<'de, V: Deserialize<'de> + 'de, D>(de: D) -> Result<HeaderMap<V>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -107,6 +107,8 @@ pub mod generic_header_map {
 
             fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
                 #[derive(Deserialize)]
+                #[repr(transparent)]
+                #[serde(transparent)]
                 struct WrappedName(
                     #[serde(with = "crate::config::serde_http::header_name")] HeaderName,
                 );
