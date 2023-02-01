@@ -51,19 +51,20 @@ The tool can then be run like this: `http-hammer -t <CONCURRENT_TASKS> <PATH_TO_
 If the `-t` flag is omitted a default value of `1` will be used.
 
 ### Configuration
-`http-hammer` expects the [TOML](https://toml.io) configuration file to contain a list of tables called `hammer` and an optional table `cookies`.
+`http-hammer` expects the [TOML](https://toml.io) configuration file to contain a list of tables called `hammer` and two optional tables `cookies` and `headers`.
 
 The `hammer` tables specify the different API endpoints to test and can have the following properties.
 - `uri` the URI of the http endpoint.
 - `count` how many requests to send.
 - (optional) `method` a HTTP method for the hammer requests, default: `GET`.
 - (optional) `cookie` a table of cookie name and value pairs, cookies names and values will both be URL encoded, a cookie can be set to an empty table (`{}`) to remove it (if it was set by the global `cookies` table then it will be overridden).
-- (optional) `headers` a table of header name and value pairs, headers names and values will NOT be URL encoded and thus must be valid HTTP header names and values..
+- (optional) `headers` a table of header name and value pairs, headers names and values will NOT be URL encoded and thus must be valid HTTP header names and values.
 - (optional) `body` an HTTP body of for the hammer requests, default: empty.
 - (optional) `name` a human readable name that will be displayed while testing, default: `$method $uri`.
 - (optional) `max_concurrency` a limit for the amount of tasks to use for hammering. `http-hammer` will use `min($max_concurrency, $cli_concurrency)` where `cli_concurrency` is the number passed to the binary via the `-t` flag.
 
-The `cookie` table specifies global cookies that will be inherited by all hammer entries in the file, as with the `cookie` property of `hammer`, these will be URL encoded but setting a cookie to `{}` is disallowed since it makes no sense here.
+The `cookie` table specifies global cookies that will be inherited by all hammer entries in the file, behaves similarly to the `cookies` property on `hammer` except that setting a cookie to `{}` here is disallowed.
+The `headers` table specifies global headers, similar to the `cookies` table.
 
 ##### Examples
 - Send 1000 GET requests to `http://127.0.0.1:8000`:
