@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use httptest::{
     all_of, any_of,
-    matchers::{contains, eq, json_decoded, request},
+    matchers::{contains, eq, json_decoded, request, any, not},
     responders, Expectation, ServerPool,
 };
 use serde_json::json;
@@ -65,6 +65,10 @@ fn test_headers() {
         |server| {
             format!(
                 r#"
+                    [headers]
+                    X-Hello = "Hi"
+                    X-Second = "one"
+
                     [[hammer]]
                     method = "GET"
                     uri = "{server}/hello"
@@ -73,7 +77,7 @@ fn test_headers() {
 
                     [hammer.headers]
                     Content-Type = "text/plain"
-                    X-Hello = "Hi"
+                    X-Second = {{}}
                 "#
             )
         },
@@ -102,14 +106,18 @@ fn test_cookies() {
         |server| {
             format!(
                 r#"
+                    [cookies]
+                    hello = "wow very cool"
+                    deleted = "I will be deleted"
+
                     [[hammer]]
                     method = "GET"
                     uri = "{server}/hello"
                     count = 1000
 
                     [hammer.cookies]
-                    hello = "wow very cool"
                     another = "cookie!"
+                    deleted = {{}}
                 "#
             )
         },
@@ -181,6 +189,7 @@ fn test_everything() {
                 request::method_path("PUT", "/hello2"),
                 request::headers(contains(("content-type", "application/json"))),
                 request::headers(contains(("cookie", format!("{COOKIE_NAME}={TOKEN}")))),
+                request::headers(not(contains(("X-Hello", any())))),
             ])
             .times(1000)
             .respond_with(responders::status_code(200)),
@@ -197,6 +206,7 @@ fn test_everything() {
                     format = "{{}}"
 
                     [headers]
+                    X-Hello = "Hi"
                     Content-Type = "application/json"
 
                     [[hammer]]
@@ -208,7 +218,6 @@ fn test_everything() {
                     [hammer.headers]
                     Content-Type = "text/plain"
                     Authorization = "{AUTH_SCHEMA} ${{resources.token}}"
-                    X-Hello = "Hi"
 
                     [[hammer]]
                     method = "PUT"
@@ -217,6 +226,7 @@ fn test_everything() {
 
                     [hammer.cookies]
                     {COOKIE_NAME} = "${{resources.token}}"
+                    X-Hello = {{}}
                 "#
             )
         },
