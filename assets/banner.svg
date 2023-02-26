@@ -9,6 +9,9 @@
    id="svg5"
    inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
    sodipodi:docname="banner.svg"
+   inkscape:export-filename="banner.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -26,8 +29,8 @@
      inkscape:document-units="mm"
      showgrid="false"
      inkscape:zoom="1.9582637"
-     inkscape:cx="319.16028"
-     inkscape:cy="115.66368"
+     inkscape:cx="294.9041"
+     inkscape:cy="116.685"
      inkscape:window-width="1920"
      inkscape:window-height="1080"
      inkscape:window-x="0"
@@ -390,16 +393,16 @@
          y="-8.043128" />
       <text
          xml:space="preserve"
-         transform="matrix(0.26458333,0,0,0.26458333,-70.910328,-62.992506)"
+         transform="matrix(0.26458333,0,0,0.26458333,-70.910328,-64.320136)"
          id="text162"
          style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:133.333px;line-height:0;font-family:'Hack Nerd Font';-inkscape-font-specification:'Hack Nerd Font Bold';text-align:center;white-space:pre;shape-inside:url(#rect164);display:inline;fill:#ffffff;fill-opacity:1"
          x="325.78125"
          y="0"><tspan
            x="111.3677"
-           y="314.33259"
-           id="tspan8271"><tspan
+           y="319.35041"
+           id="tspan493"><tspan
              style="font-family:'Hack Nerd Font Mono';-inkscape-font-specification:'Hack Nerd Font Mono Bold'"
-             id="tspan8269">HTTP:</tspan></tspan></text>
+             id="tspan491">HTTP:</tspan></tspan></text>
       <rect
          style="fill:#cf6600;fill-opacity:1;stroke:#813f00;stroke-width:0.582263;stroke-dasharray:none;stroke-opacity:1;filter:url(#filter6032)"
          id="rect477"

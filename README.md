@@ -1,5 +1,5 @@
 <p align="center" width="100%">
-	<img src="assets/banner.svg"/>
+	<img src="assets/banner.png"/>
 </p>
 <h1 align="center">HTTP Hammer</h1>
 
